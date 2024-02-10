@@ -14,8 +14,8 @@ use twilight_model::id::marker::{ChannelMarker, GuildMarker};
 use twilight_model::id::Id;
 use url::Url;
 
-use crate::models::track_events::TrackEvents;
-use crate::models::{Track, TrackLoadingResult};
+use crate::models::track_events::Event as TrackEvents;
+use crate::models::{LoadTracksResult, Track};
 
 pub mod models;
 
@@ -33,30 +33,30 @@ pub enum Error {
     HttpRequestFailed,
 }
 
-pub struct RhyoliteWsClient {
+pub struct WebSocketClient {
     ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     connection_url: String,
     authorization: String,
     bot_id: String,
     session_id: Option<String>,
-    cache: Arc<RhyoliteCache>,
+    cache: Arc<InMemoryCache>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "op", rename_all = "camelCase")]
-pub enum Events {
-    Ready(models::ReadyEvent),
-    PlayerUpdate(models::PlayerUpdateEvent),
-    Stats(models::StatsEvent),
-    Event(TrackEvents),
+pub enum Event {
+    Ready(models::Ready),
+    PlayerUpdate(models::PlayerUpdate),
+    Stats(models::Stats),
+    Track(TrackEvents),
 }
 
-impl RhyoliteWsClient {
+impl WebSocketClient {
     pub async fn new(
         connection_url: &str,
         authorization: &str,
         bot_id: &str,
-        cache: Arc<RhyoliteCache>,
+        cache: Arc<InMemoryCache>,
     ) -> Self {
         let url =
             Url::parse(&format!("ws://{}/v4/websocket", connection_url)).expect("Invalid url");
@@ -84,8 +84,8 @@ impl RhyoliteWsClient {
             session_id: None,
             cache,
         };
-        let event = client.next().await;
-        if let Ok(Events::Ready(r)) = event {
+        let event = client.next_event().await;
+        if let Ok(Event::Ready(r)) = event {
             client.session_id = Some(r.session_id);
         } else {
             panic!("First event wasn't ready.");
@@ -94,7 +94,7 @@ impl RhyoliteWsClient {
         client
     }
 
-    pub async fn next(&mut self) -> Result<Events, Error> {
+    pub async fn next_event(&mut self) -> Result<Event, Error> {
         let msg = loop {
             let msg = match self.ws_stream.next().await {
                 Some(Ok(m)) => m,
@@ -115,8 +115,8 @@ impl RhyoliteWsClient {
             }
         };
 
-        let event = serde_json::from_str::<Events>(&msg).map_err(|_| Error::InvalidOp);
-        if let Ok(Events::Event(e)) = event.as_ref() {
+        let event = serde_json::from_str::<Event>(&msg).map_err(|_| Error::InvalidOp);
+        if let Ok(Event::Track(e)) = event.as_ref() {
             self.update_player(e);
         }
 
@@ -161,8 +161,8 @@ impl RhyoliteWsClient {
         let (ws_stream, _) = ws_connect.unwrap();
         self.ws_stream = ws_stream;
 
-        let event = self.next().await;
-        if let Ok(Events::Ready(r)) = event {
+        let event = self.next_event().await;
+        if let Ok(Event::Ready(r)) = event {
             self.session_id = Some(r.session_id);
         } else {
             panic!("First event wasn't ready.");
@@ -173,7 +173,7 @@ impl RhyoliteWsClient {
 
     fn update_player(&mut self, track_event: &TrackEvents) {
         match track_event {
-            TrackEvents::TrackStartEvent { guild_id, track } => {
+            TrackEvents::Start { guild_id, track } => {
                 let mut player = self
                     .cache
                     .players
@@ -181,7 +181,7 @@ impl RhyoliteWsClient {
                     .expect("Player was never cached");
                 player.track = Some(track.clone());
             }
-            TrackEvents::TrackEndEvent { guild_id, .. } => {
+            TrackEvents::End { guild_id, .. } => {
                 let mut player = self
                     .cache
                     .players
@@ -189,7 +189,7 @@ impl RhyoliteWsClient {
                     .expect("Player was never cached");
                 player.track = None;
             }
-            TrackEvents::WebSocketClosedEvent { guild_id, .. } => {
+            TrackEvents::WebSocketClosed { guild_id, .. } => {
                 self.cache.players.remove(guild_id);
             }
             _ => {}
@@ -197,9 +197,9 @@ impl RhyoliteWsClient {
     }
 }
 
-pub struct RhyoliteCache {
+pub struct InMemoryCache {
     guild_tokens: DashMap<Id<GuildMarker>, GuildToken>,
-    players: DashMap<Id<GuildMarker>, RhyolitePlayer>,
+    players: DashMap<Id<GuildMarker>, Player>,
 }
 
 struct GuildToken {
@@ -208,13 +208,13 @@ struct GuildToken {
     channel_sessions: DashMap<Id<ChannelMarker>, String>,
 }
 
-pub struct RhyolitePlayer {
+pub struct Player {
     pub channel_id: Id<ChannelMarker>,
     pub track: Option<Track>,
 }
 
-impl RhyoliteCache {
-    pub fn process_vc_event(&self, event: TwilightEvent) -> Result<(), Error> {
+impl InMemoryCache {
+    pub fn process_voice_event(&self, event: TwilightEvent) -> Result<(), Error> {
         if let TwilightEvent::VoiceStateUpdate(v) = event {
             println!("Processing voice state update.");
             return self.handle_voice_state_update(v);
@@ -226,32 +226,32 @@ impl RhyoliteCache {
         Ok(())
     }
 
-    fn handle_voice_server_update(&self, vcu: VoiceServerUpdate) -> Result<(), Error> {
-        let player = self.players.get_mut(&vcu.guild_id);
+    fn handle_voice_server_update(&self, e: VoiceServerUpdate) -> Result<(), Error> {
+        let player = self.players.get_mut(&e.guild_id);
         if let Some(mut _p) = player {
             // TODO: Update the player
         }
 
         // The cache should always be up-to-date if user wants to change channel
-        let guild = self.guild_tokens.get_mut(&vcu.guild_id);
+        let guild = self.guild_tokens.get_mut(&e.guild_id);
 
         if let Some(mut g) = guild {
-            g.token = vcu.token;
-            g.endpoint = vcu.endpoint;
+            g.token = e.token;
+            g.endpoint = e.endpoint;
         } else {
             let guild_token = GuildToken {
                 channel_sessions: DashMap::new(),
-                endpoint: vcu.endpoint,
-                token: vcu.token,
+                endpoint: e.endpoint,
+                token: e.token,
             };
-            self.guild_tokens.insert(vcu.guild_id, guild_token);
+            self.guild_tokens.insert(e.guild_id, guild_token);
         }
 
         Ok(())
     }
 
-    fn handle_voice_state_update(&self, vcu: Box<VoiceStateUpdate>) -> Result<(), Error> {
-        if let (Some(g), Some(c)) = (vcu.guild_id, vcu.channel_id) {
+    fn handle_voice_state_update(&self, e: Box<VoiceStateUpdate>) -> Result<(), Error> {
+        if let (Some(g), Some(c)) = (e.guild_id, e.channel_id) {
             let player = self.players.get_mut(&g);
             if let Some(p) = player {
                 if p.channel_id != c {
@@ -262,7 +262,7 @@ impl RhyoliteCache {
 
             let guild = self.guild_tokens.get_mut(&g);
             if let Some(g) = guild {
-                g.channel_sessions.insert(c, vcu.session_id.clone());
+                g.channel_sessions.insert(c, e.session_id.clone());
             }
         }
 
@@ -270,24 +270,21 @@ impl RhyoliteCache {
     }
 }
 
-impl Default for RhyoliteCache {
+impl Default for InMemoryCache {
     fn default() -> Self {
-        let guild_tokens = DashMap::new();
-        let players = DashMap::new();
-
-        RhyoliteCache {
-            guild_tokens,
-            players,
+        InMemoryCache {
+            guild_tokens: DashMap::new(),
+            players: DashMap::new(),
         }
     }
 }
 
-pub struct RhyoliteHttp {
-    http: reqwest::Client,
+pub struct Http {
+    inner: reqwest::Client,
     url: String,
 }
 
-impl RhyoliteHttp {
+impl Http {
     pub fn new(host: &str, authorization: &str) -> Self {
         let mut header_map = HeaderMap::new();
         header_map.insert("Authorization", authorization.parse().unwrap());
@@ -295,27 +292,27 @@ impl RhyoliteHttp {
         let builder = ClientBuilder::new().default_headers(header_map);
         let url = format!("http://{}/v4", host);
 
-        RhyoliteHttp {
-            http: builder.build().unwrap(),
+        Http {
+            inner: builder.build().unwrap(),
             url,
         }
     }
 
-    pub async fn load_tracks(&self, identifer: &str) -> Result<TrackLoadingResult, Error> {
+    pub async fn load_tracks(&self, identifier: &str) -> Result<LoadTracksResult, Error> {
         let url = Url::parse_with_params(
             &format!("{}/loadtracks", self.url),
-            &[("identifier", identifer)],
+            &[("identifier", identifier)],
         )
         .unwrap();
 
-        let result = self.http.get(url).send().await;
+        let result = self.inner.get(url).send().await;
         if result.is_err() {
             return Err(Error::HttpRequestFailed);
         }
 
         result
             .unwrap()
-            .json::<TrackLoadingResult>()
+            .json::<LoadTracksResult>()
             .await
             .map_err(|_| Error::HttpRequestFailed)
     }

@@ -7,14 +7,14 @@ pub mod track_events;
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct ReadyEvent {
+pub struct Ready {
     pub resumed: bool,
     pub session_id: String,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct PlayerUpdateEvent {
+pub struct PlayerUpdate {
     pub guild_id: Id<Guild>,
     pub state: PlayerState,
 }
@@ -30,7 +30,7 @@ pub struct PlayerState {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct StatsEvent {
+pub struct Stats {
     pub players: i32,
     pub playing_players: i32,
     pub uptime: i32,
@@ -91,11 +91,11 @@ pub struct TrackInfo {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase", tag = "loadType", content = "data")]
-pub enum TrackLoadingResult {
+pub enum LoadTracksResult {
     Track(Track),
-    Playlist(PlaylistLoad),
+    Playlist(Playlist),
     Search(Vec<Track>),
-    Empty {},
+    Empty,
     Error(LavalinkException),
 }
 
@@ -108,7 +108,7 @@ pub struct PlaylistInfo {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct PlaylistLoad {
+pub struct Playlist {
     pub info: PlaylistInfo,
     pub tracks: Vec<Track>,
 }

@@ -1,5 +1,2 @@
 [workspace]
-members = [
-    "rhyolite",
-    "rhyolite-test"
-]
+members = ["rhyolite", "rhyolite-test"]
