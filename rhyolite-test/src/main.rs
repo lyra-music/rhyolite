@@ -6,15 +6,15 @@ use twilight_model::gateway::payload::outgoing::UpdateVoiceState;
 use twilight_model::id::marker::{ChannelMarker, GuildMarker};
 use twilight_model::id::Id;
 
-use rhyolite::models::TrackLoadingResult;
-use rhyolite::{RhyoliteCache, RhyoliteHttp, RhyoliteWsClient};
+use rhyolite::models::LoadTracksResult;
+use rhyolite::{Http, InMemoryCache, WebSocketClient};
 
 #[tokio::main]
 async fn main() {
     let token = std::env::var("BOT_TOKEN").unwrap();
 
-    let mut cache = Arc::new(RhyoliteCache::default());
-    let http = RhyoliteHttp::new("localhost:2333", "abc");
+    let mut cache = Arc::new(InMemoryCache::default());
+    let http = Http::new("localhost:2333", "abc");
 
     let twil_http = twilight_http::Client::new(token.clone());
     let user_id = twil_http
@@ -28,7 +28,7 @@ async fn main() {
     println!("User id is {}", user_id);
 
     let request = http.load_tracks("ytsearch:INTERNET YAMERO").await.unwrap();
-    if let TrackLoadingResult::Search(s) = request {
+    if let LoadTracksResult::Search(s) = request {
         for track in s.iter().take(5) {
             println!(
                 "Found track \"{}\" from author {}",
@@ -38,7 +38,7 @@ async fn main() {
     }
 
     let request = http.load_tracks("BidG5Goe4RU").await.unwrap();
-    if let TrackLoadingResult::Track(t) = request {
+    if let LoadTracksResult::Track(t) = request {
         println!(
             "Got track \"{}\" from author {}",
             t.info.title, t.info.author
@@ -46,12 +46,12 @@ async fn main() {
     }
 
     let mut ws_client =
-        RhyoliteWsClient::new("localhost:2333", "abc", &user_id.to_string(), cache.clone()).await;
+        WebSocketClient::new("localhost:2333", "abc", &user_id.to_string(), cache.clone()).await;
 
     let task = tokio::spawn(async move {
         loop {
             println!("Getting lavalink event");
-            let result = ws_client.next().await;
+            let result = ws_client.next_event().await;
             if result.is_err() {
                 break;
             }
@@ -80,7 +80,7 @@ async fn main() {
             }
         };
 
-        let result = cache.process_vc_event(event);
+        let result = cache.process_voice_event(event);
         if let Err(e) = result {
             println!("Errored with: {}", e);
         }

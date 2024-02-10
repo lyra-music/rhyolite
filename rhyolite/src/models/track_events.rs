@@ -6,27 +6,27 @@ use crate::models::{Severity, Track};
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
-pub enum TrackEvents {
-    TrackStartEvent {
+pub enum Event {
+    Start {
         guild_id: Id<GuildMarker>,
         track: Track,
     },
-    TrackEndEvent {
+    End {
         guild_id: Id<GuildMarker>,
         track: Track,
         reason: TrackEndReason,
     },
-    TrackExceptionEvent {
+    Exception {
         guild_id: Id<GuildMarker>,
         track: Track,
         exception: Severity,
     },
-    TrackStuckEvent {
+    Stuck {
         guild_id: Id<GuildMarker>,
         track: Track,
         threshold_ms: i32,
     },
-    WebSocketClosedEvent {
+    WebSocketClosed {
         guild_id: Id<GuildMarker>,
         code: i32,
         reason: String,
